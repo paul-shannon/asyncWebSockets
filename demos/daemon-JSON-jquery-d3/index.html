@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>mtcars</title>
+   <script src="http://s3.amazonaws.com/oncoscape/js/jquery-2.1.0.min.js"></script>
+   <script src="//code.jquery.com/ui/1.10.4/jquery-ui.js"></script>
+   <link   rel="stylesheet" href="//code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
+   <script src="http://s3.amazonaws.com/oncoscape/js/d3.min.js"></script>
+
+<style type="text/css">
+body { font-family: Helvetica; }
+pre { margin: 0 }
+
+
+#plotDiv {
+   border: 1px solid #aaa;
+   background-color: #FAFAFA;
+   margin-top: 1px;
+   margin-left: 3px;
+   margin-right: 0;
+   margin-bottom: 1px;
+   padding: 1px;
+   padding-bottom: 0px;
+   }
+
+.extent {
+  fill-opacity: .1;
+  stroke: #f00;
+}
+
+</style>
+
+<script>
+var ws = new WebSocket("ws://localhost:9454");
+var plotDiv;
+var payload;
+var currentDataset, currentData;   // the raw payload; the extracted array of objects
+var dataReceived = false;
+var d3plotDiv;
+var d3brush, selectedRegion;
+
+//--------------------------------------------------------------------------------
+$(document).ready(function(){
+    console.log("=== document ready");
+    pageSetup();
+    });
+//--------------------------------------------------------------------------------
+function pageSetup()
+{
+   console.log("=== pageSetup");
+   plotDiv = $("#plotDiv");
+   d3plotDiv = d3.select("#plotDiv");
+   plotDivHandleWindowResize();
+   $(window).resize(plotDivHandleWindowResize);
+
+} // pageSetup
+//--------------------------------------------------------------------------------
+ws.onmessage = function(msg)
+{
+  msg = JSON.parse(msg.data);
+  console.log("=== ws.onmessage");
+  console.log(msg);
+  dispatchMessage(msg);
+
+}
+//--------------------------------------------------------------------------------
+function brushReader ()
+{
+  console.log("brushReader");
+  selectedRegion = d3brush.extent();
+  x0 = selectedRegion[0][0];
+  x1 = selectedRegion[1][0];
+  width = Math.abs(x0-x1);
+  if(width < 1)
+     selectedRegion = null
+
+}; // d3PlotBrushReader
+//--------------------------------------------------------------------------------
+function sendInput() {
+   var input = document.getElementById('input');
+   ws.send(input.value);
+   input.value = '';
+   }
+
+//--------------------------------------------------------------------------------
+function display(text){
+   $("#output").text(text);
+   }
+
+//--------------------------------------------------------------------------------
+function dispatchMessage(msg)
+{
+
+   console.log("--- dispatchMessage");
+   console.log(msg)
+
+   switch(msg.cmd) {
+      case "ping":
+        console.log("received 'ping' cmd");
+        display(msg.payload)
+        handlePing();
+        break;
+      case "plotxy":
+        payload = msg.payload;
+        d3plot(msg.payload)
+        break;
+      case "getSelection":
+        getSelection(msg);
+        break;
+      case "selectByName":
+        selectByName(msg.payload);
+        break;
+      case "clearSelection":
+        clearSelection();
+        break;
+      default:
+        console.log("unrecognized cmd: " + msg.cmd);
+      } // switch
+   } // dispatchMessage
+
+//--------------------------------------------------------------------------------
+function handlePing(payload)
+{
+   returnMsg = {cmd: payload.callback, callback: "", payload: Date()};
+   ws.send(JSON.stringify(returnMsg));
+
+} // handlePing
+//--------------------------------------------------------------------------------
+function getSelection(payload)
+{
+   console.log("getSelection, callback: " + payload.callback);
+   if(selectedRegion == null)
+      return; // should return an R compatible, or empty array of identifiers
+
+   count = currentDataset.x.length;
+   selectedNames = [];
+
+   x0 = selectedRegion[0][0]
+   x1 = selectedRegion[1][0]
+   y0 = selectedRegion[0][1]
+   y1 = selectedRegion[1][1]
+
+   console.log("region in x: " + x0 + ":" + x1 + "   in y: " + y0 + ": " + y1)
+
+   for(var i=0; i < count; i++){
+      x = currentDataset.x[i];
+      y = currentDataset.y[i];
+      name = currentDataset.names[i];
+      console.log("checking (" + x + ", ", + y + ")");
+      if(x >= x0 & x <= x1 & y >= y0 & y <= y1) {
+        console.log ("TRUE");
+        selectedNames.push(name);
+        }
+     } // for i
+
+   console.log(" found " + selectedNames.length + " selected points");
+   returnMsg = {cmd: payload.callback, callback: "", payload: selectedNames};
+   console.log("=== returnMsg");
+   console.log(returnMsg);
+   ws.send(JSON.stringify(returnMsg));
+
+} // getSelection
+//--------------------------------------------------------------------------------
+function plotDivHandleWindowResize()
+{
+    newWidth = $(window).width()   * 0.95;
+    newHeight = $(window).height() * 0.80;
+    console.log("=== window resize, new plotDiv size: " + newWidth + ", " + newHeight);
+    plotDiv.width(newWidth);
+    plotDiv.height(newHeight);
+    if(dataReceived)
+       d3plot(currentDataset);
+
+} // plotDivHandleWindowResize
+//--------------------------------------------------------------------------------
+function d3plot(payload)
+{
+  dataReceived = true;
+    // extract from x, y, and names parallel vectors into a list of name, x, y objects
+
+  data = [];
+  count = payload.x.length
+  for(var i=0; i < count; i++)
+    data.push({id: payload.names[i], x: payload.x[i], y: payload.y[i]});
+
+  currentData = data;
+  console.log("=== newly extracted data:");
+  console.log(data);
+
+  currentDataset = payload;   // declared global, reused in windowResize handler
+                              // and in calculating currently selected points
+
+  var width = $("#plotDiv").width();
+  var height = $("#plotDiv").height();
+
+  payloadFields = Object.keys(payload);
+  console.log("payload fields: " + payloadFields);
+
+  console.log("payload: " + payload);
+
+  names = payload.names
+
+  x = payload.x
+  xMin = payload.xMin
+  xMax = payload.xMax
+
+  y = payload.y
+  yMin = payload.yMin
+  yMax = payload.yMax
+
+  padding = 50;
+  xScale = d3.scale.linear()
+                 .domain([xMin,xMax])
+                 .range([padding,width-padding]);
+
+  yScale = d3.scale.linear()
+                 .domain([yMin, yMax])
+                 .range([height-padding, padding]); // note inversion
+
+
+  yAxis = d3.svg.axis()
+                .scale(yScale)
+                .ticks(3)
+                .orient("left");
+
+  dataset = []
+  for(var i=0; i < x.length; i++){
+    newPoint = [x[i], y[i]];
+    //console.log("newPoint: " + newPoint);
+    dataset.push(newPoint);
+    }
+
+  console.log("dataset of length " + dataset.length);
+
+    // must remove the svg from a d3-selected object, not just a jQuery object
+  d3plotDiv.select("#plotSVG").remove();  // so that append("svg") is not cumulative
+
+  d3brush = d3.svg.brush()
+        .x(xScale)
+        .y(yScale)
+        .on("brushend", brushReader);
+
+
+  var svg = d3.select("#plotDiv")
+      .append("svg")
+      .attr("id", "plotSVG")
+      .attr("width", width)
+      .attr("height", height)
+      .call(d3brush);
+
+  xAxis = d3.svg.axis()
+                 .scale(xScale)
+                 .ticks(10)
+                 .tickSize(10)
+                 .orient("top");
+  var xTranslationForYAxis = xScale(0);
+  var yTranslationForXAxis = yScale(10);
+
+  var tooltip = d3plotDiv.append("div")
+                   .attr("class", "tooltip")
+                   .style("position", "absolute")
+                   .style("z-index", "10")
+                   .style("visibility", "hidden")
+                   .text("a simple tooltip");
+
+
+   svg.selectAll("circle")
+      .data(data)
+      .enter()
+      .append("circle")
+      .attr("cx", function(d,i){
+        return xScale(d.x);
+        })
+      .attr("cy", function(d,i){
+        return yScale(d.y);
+        })
+      .attr("r", function(d){
+        return 3;
+        })
+      .on("mouseover", function(d,i){
+         tooltip.text(d.id);
+         return tooltip.style("visibility", "visible");
+         })
+      .on("mousemove", function(){
+         return tooltip.style("top",
+                (d3.event.pageY-10)+"px").style("left",(d3.event.pageX+10)+"px");})
+      .on("mouseout", function(){return tooltip.style("visibility", "hidden");});
+
+
+
+
+   //svg.append("g")
+   //   .attr("class", "axis")
+   //   .attr("transform", "translate(0," + (h - padding) + ")")
+   //   .call(xAxis);
+
+   //svg.append("g")
+   //   .attr("class", "axis")
+   //   .attr("transform", "translate(2,0)")
+   //   .call(yAxis);
+
+
+} // d3plot
+//--------------------------------------------------------------------------------
+function selectByName(ids)
+{
+   d3.selectAll("circle")
+      .filter(function(d,i){
+          if(typeof(d) == "undefined")
+             return(false);
+          if(typeof(d.id) == "undefined")
+             return(false);
+          name = d.id
+          console.log("current name: " + name);
+          match = ids.indexOf(name);
+          return (match >= 0);
+          })
+     .classed("highlighted", true)
+     .attr("r", 7);
+
+} // selectByName
+//--------------------------------------------------------------------------------
+function clearSelection()
+{
+   d3.selectAll("circle")
+      .classed("highlighted", false)
+      .attr("r", 3);
+
+}; // clearSelection
+//--------------------------------------------------------------------------------
+
+</script>
+
+</head>
+
+<body>
+<center><h2>mtcars: mpg vs. disp</h2></center>
+
+<div id="output"> </div>
+<div id="plotDiv"></div>
+</body>
+</html>

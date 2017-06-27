@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>~/s/examples/R/websockets/httpuv/daemonEcho1</title>
+<style type="text/css">
+body { font-family: Helvetica; }
+pre { margin: 0 }
+</style>
+
+<script>
+  var socketURI = window.location.href.replace("http://", "ws://");
+  var ws = new WebSocket(socketURI);
+  ws.onmessage = function(msg) {
+     var msgDiv = document.getElementById("outputDiv");
+     var incomingText = msg.data
+     var outgoingText = incomingText.toUpperCase()
+     msgDiv.innerHTML = "<b>received:</b> " + incomingText + "<br><b>returning: </b> " + outgoingText;
+     console.log(incomingText);
+     console.log(outgoingText)
+     ws.send(outgoingText);
+     }
+
+  function sendInput() {
+     var input = document.getElementById('input');
+     ws.send(input.value);
+     input.value = '';
+     }
+</script>
+
+</head>
+
+<body>
+<h4> Simple httpuv daemonized web socket server test</h4>
+<h5> Strings received from R (<i> send(wsCon, "demo")</i> are returned in upper case</h5>
+<button>
+<div id="outputDiv"></div>
+</body>
+
+</html>
